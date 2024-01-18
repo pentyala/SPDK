@@ -4668,14 +4668,12 @@ Example response:
 ### bdev_nvme_cuse_register {#rpc_bdev_nvme_cuse_register}
 
 Register CUSE device on NVMe controller.
-This feature is considered as experimental.
 
 #### Parameters
 
 Name                    | Optional | Type        | Description
 ----------------------- | -------- | ----------- | -----------
 name                    | Required | string      | Name of the NVMe controller
-dev_path                | Required | string      | Path to the CUSE controller device, e.g. spdk/nvme0
 
 #### Example
 
@@ -4683,13 +4681,12 @@ Example request:
 
 ~~~json
 {
-  "params": {
-    "dev_path": "spdk/nvme0",
-    "name": "Nvme0"
-  },
   "jsonrpc": "2.0",
   "method": "bdev_nvme_cuse_register",
-  "id": 1
+  "id": 1,
+  "params": {
+    "name": "Nvme0"
+  }
 }
 ~~~
 
@@ -4706,7 +4703,6 @@ Example response:
 ### bdev_nvme_cuse_unregister {#rpc_bdev_nvme_cuse_unregister}
 
 Unregister CUSE device on NVMe controller.
-This feature is considered as experimental.
 
 #### Parameters
 
@@ -8055,7 +8051,7 @@ nqn                        | Required | string      | Subsystem NQN
 tgt_name                   | Optional | string      | Parent NVMe-oF target name.
 serial_number              | Optional | string      | Serial number of virtual controller
 model_number               | Optional | string      | Model number of virtual controller
-max_namespaces             | Optional | number      | Maximum number of namespaces that can be attached to the subsystem. Default: 0 (Unlimited)
+max_namespaces             | Optional | number      | Maximum number of namespaces that can be attached to the subsystem. Default: 32 (also used if user specifies 0)
 allow_any_host             | Optional | boolean     | Allow any host (`true`) or enforce allowed host list (`false`). Default: `false`.
 ana_reporting              | Optional | boolean     | Enable ANA reporting feature (default: `false`).
 min_cntlid                 | Optional | number      | Minimum controller ID. Default: 1

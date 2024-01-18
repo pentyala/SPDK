@@ -2111,6 +2111,7 @@ raid_bdev_examine_sb(const struct raid_bdev_superblock *sb, struct spdk_bdev *bd
 		if (rc != 0) {
 			SPDK_ERRLOG("Failed to create raid bdev %s: %s\n",
 				    sb->name, spdk_strerror(-rc));
+			return;
 		}
 	}
 
@@ -2210,6 +2211,12 @@ raid_bdev_examine(struct spdk_bdev *bdev)
 {
 	struct raid_bdev_examine_ctx *ctx;
 	int rc;
+
+	if (spdk_bdev_get_dif_type(bdev) != SPDK_DIF_DISABLE) {
+		raid_bdev_examine_no_sb(bdev);
+		spdk_bdev_module_examine_done(&g_raid_if);
+		return;
+	}
 
 	ctx = calloc(1, sizeof(*ctx));
 	if (!ctx) {

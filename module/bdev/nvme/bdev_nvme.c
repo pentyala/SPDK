@@ -190,7 +190,7 @@ static void bdev_nvme_abort(struct nvme_bdev_channel *nbdev_ch,
 			    struct nvme_bdev_io *bio, struct nvme_bdev_io *bio_to_abort);
 static void bdev_nvme_reset_io(struct nvme_bdev_channel *nbdev_ch, struct nvme_bdev_io *bio);
 static int bdev_nvme_reset_ctrlr(struct nvme_ctrlr *nvme_ctrlr);
-static int bdev_nvme_failover_ctrlr(struct nvme_ctrlr *nvme_ctrlr, bool remove);
+static int bdev_nvme_failover_ctrlr(struct nvme_ctrlr *nvme_ctrlr);
 static void remove_cb(void *cb_ctx, struct spdk_nvme_ctrlr *ctrlr);
 static int nvme_ctrlr_read_ana_log_page(struct nvme_ctrlr *nvme_ctrlr);
 
@@ -842,11 +842,6 @@ nvme_qpair_is_connected(struct nvme_qpair *nvme_qpair)
 		return false;
 	}
 
-	if (spdk_nvme_ctrlr_get_admin_qp_failure_reason(nvme_qpair->ctrlr->ctrlr) !=
-	    SPDK_NVME_QPAIR_FAILURE_NONE) {
-		return false;
-	}
-
 	return true;
 }
 
@@ -1408,14 +1403,16 @@ bdev_nvme_io_complete(struct nvme_bdev_io *bio, int rc)
 		io_status = SPDK_BDEV_IO_STATUS_NOMEM;
 		break;
 	case -ENXIO:
-		nbdev_ch = spdk_io_channel_get_ctx(spdk_bdev_io_get_io_channel(bdev_io));
+		if (g_opts.bdev_retry_count == -1 || bio->retry_count < g_opts.bdev_retry_count) {
+			nbdev_ch = spdk_io_channel_get_ctx(spdk_bdev_io_get_io_channel(bdev_io));
 
-		bdev_nvme_clear_current_io_path(nbdev_ch);
-		bio->io_path = NULL;
+			bdev_nvme_clear_current_io_path(nbdev_ch);
+			bio->io_path = NULL;
 
-		if (any_io_path_may_become_available(nbdev_ch)) {
-			bdev_nvme_queue_retry_io(nbdev_ch, bio, 1000ULL);
-			return;
+			if (any_io_path_may_become_available(nbdev_ch)) {
+				bdev_nvme_queue_retry_io(nbdev_ch, bio, 1000ULL);
+				return;
+			}
 		}
 
 	/* fallthrough */
@@ -1577,7 +1574,7 @@ bdev_nvme_disconnected_qpair_cb(struct spdk_nvme_qpair *qpair, void *poll_group_
 		} else {
 			/* qpair was disconnected unexpectedly. Reset controller for recovery. */
 			SPDK_NOTICELOG("qpair %p was disconnected and freed. reset controller.\n", qpair);
-			bdev_nvme_failover_ctrlr(nvme_qpair->ctrlr, false);
+			bdev_nvme_failover_ctrlr(nvme_qpair->ctrlr);
 		}
 	} else {
 		/* In this case, ctrlr_channel is already deleted. */
@@ -1664,7 +1661,7 @@ bdev_nvme_poll_adminq(void *arg)
 							    g_opts.nvme_adminq_poll_period_us);
 			disconnected_cb(nvme_ctrlr);
 		} else {
-			bdev_nvme_failover_ctrlr(nvme_ctrlr, false);
+			bdev_nvme_failover_ctrlr(nvme_ctrlr);
 		}
 	} else if (spdk_nvme_ctrlr_get_admin_qp_failure_reason(nvme_ctrlr->ctrlr) !=
 		   SPDK_NVME_QPAIR_FAILURE_NONE) {
@@ -2053,7 +2050,7 @@ _bdev_nvme_reset_ctrlr_complete(struct spdk_io_channel_iter *i, int status)
 		nvme_ctrlr_disconnect(nvme_ctrlr, bdev_nvme_start_reconnect_delay_timer);
 		break;
 	case OP_FAILOVER:
-		bdev_nvme_failover_ctrlr(nvme_ctrlr, false);
+		bdev_nvme_failover_ctrlr(nvme_ctrlr);
 		break;
 	default:
 		break;
@@ -2170,6 +2167,10 @@ bdev_nvme_reset_check_qpair_connected(void *ctx)
 	/* qpair was completed to connect. Move to the next ctrlr_channel */
 	spdk_for_each_channel_continue(ctrlr_ch->reset_iter, 0);
 	ctrlr_ch->reset_iter = NULL;
+
+	if (!g_opts.disable_auto_failback) {
+		_bdev_nvme_clear_io_path_cache(ctrlr_ch->qpair);
+	}
 
 	return SPDK_POLLER_BUSY;
 }
@@ -2851,12 +2852,12 @@ bdev_nvme_failover_ctrlr_unsafe(struct nvme_ctrlr *nvme_ctrlr, bool remove)
 }
 
 static int
-bdev_nvme_failover_ctrlr(struct nvme_ctrlr *nvme_ctrlr, bool remove)
+bdev_nvme_failover_ctrlr(struct nvme_ctrlr *nvme_ctrlr)
 {
 	int rc;
 
 	pthread_mutex_lock(&nvme_ctrlr->mutex);
-	rc = bdev_nvme_failover_ctrlr_unsafe(nvme_ctrlr, remove);
+	rc = bdev_nvme_failover_ctrlr_unsafe(nvme_ctrlr, false);
 	pthread_mutex_unlock(&nvme_ctrlr->mutex);
 
 	if (rc == 0) {
